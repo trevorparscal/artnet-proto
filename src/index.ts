@@ -438,7 +438,7 @@ export class Artnet extends EventEmitter {
         timeout: number = 2000,
     ): Promise<{ ip: string; port: number; info: ArtNetNodeInfo }[]> {
         return new Promise((resolve) => {
-            const socket = createSocket("udp4");
+            const socket = createSocket({ type: 'udp4', reuseAddr: true } );
             this.discoveredNodes = [];
 
             // Handle incoming UDP messages (possible ArtPollReply packets)
@@ -503,23 +503,9 @@ export class Artnet extends EventEmitter {
      * @returns Buffer containing the ArtPoll packet.
      */
     private createArtPollPacket(): Buffer {
-        // "Art-Net" string (8 bytes), OpCode 0x2000 (ArtPoll), ProtVer 0x14, TalkToMe 0x00, Priority 0x00
-        return Buffer.from([
-            0x41,
-            0x72,
-            0x74,
-            0x2d,
-            0x4e,
-            0x65,
-            0x74,
-            0x00, // "Art-Net" + null terminator
-            0x20,
-            0x00, // OpCode: ArtPoll
-            0x14,
-            0x00, // ProtVer: 14
-            0x00, // TalkToMe
-            0x00, // Priority
-        ]);
+        const packet = Buffer.from( 'Art-Net\x000  \x0e\x00\x00', 'ascii' ); // OpPoll, ver 14
+        packet.writeUInt16LE( 0x2000, 8 ); // OpPoll = 0x2000 (little-endian in packet)
+        return packet;
     }
 
     /**
@@ -545,12 +531,13 @@ export class Artnet extends EventEmitter {
      * @returns ArtNetNodeInfo object with extracted node/device details.
      */
     private parseArtPollReply(msg: Buffer): ArtNetNodeInfo {
-        const getString = (start: number, len: number): string =>
-            msg
-                .subarray(start, Math.min(start + len, msg.length))
-                .toString("ascii")
-                .replace(/\0.*$/, "")
-                .trim();
+        // Clean null-terminated ASCII strings and strip garbage (common on cheap nodes)
+        function getString(start: number, length: number) {
+            const end = msg.indexOf(0, start);
+            const raw = msg.subarray(start, end === -1 ? start + length : end).toString("ascii");
+            // eslint-disable-next-line no-control-regex
+            return raw.replace(/[\x00-\x1F\x7F-\xFF]/g, "").trim();
+        };
 
         const nodeIp =
             msg.length >= 14
